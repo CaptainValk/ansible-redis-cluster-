@@ -1,0 +1,8 @@
+---
+# vars file for redis
+master_port: 6379
+slave_port: 6380
+file_name: 'redis-6.2.5'
+install_path: '/usr/local'
+data_path: '/data/redis'
+redis_password: 'E9QZjNtacn'

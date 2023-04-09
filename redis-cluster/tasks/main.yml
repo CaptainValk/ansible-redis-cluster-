@@ -1,0 +1,150 @@
+---
+ - name: Create Base Path
+   file:
+     path: '{{install_path}}/redis/{{item.port}}'
+     state: 'directory'
+   become: true
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+ 
+ - name: Create Base Path
+   file:
+     path: '{{data_path}}/{{item.port}}'
+     state: 'directory'
+   become: true
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+ 
+ - name: Check if redis exists
+   shell: 'ps -ef | grep redis-server | grep -v "grep" | wc -l'
+   register: check_redis
+ 
+ - name: Stop redis server
+   shell: 'redis-cli -h localhost -p {{item.port}} -a {{redis_password}} shutdown'
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+   when: check_redis.stdout|int > 0
+ 
+ - name: Delete aof
+   file:
+    path: '{{data_path}}/{{item.port}}/appendonly.aof'
+    state: absent
+   become: true
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+ 
+ - name: Delete nodes.conf
+   file:
+    path: '{{install_path}}/{{item.port}}/nodes.conf'
+    state: absent
+   become: true
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+ 
+ - name: Copy redis tar
+   copy:
+     src: '{{file_name}}.tar.gz'
+     dest: '/tmp'
+   become: true
+ 
+ - name: Unpack redis tar
+   unarchive:
+     src: '/tmp/{{file_name}}.tar.gz'
+     dest: '{{install_path}}'
+     remote_src: yes
+     owner: root
+     group: root
+   become: true
+ - name: Installing Redis
+   shell: make && make install
+   args:
+     chdir: '{{install_path}}/{{file_name}}'
+   become: true
+ 
+ - name: Replace common config
+   replace:
+     path: '{{install_path}}/{{file_name}}/redis.conf'
+     regexp: '{{item.regexp}}'
+     replace: '{{ item.line }}'
+   with_items:
+     - { regexp: 'bind 127.0.0.1 -::1', line: 'bind 0.0.0.0'}
+     - { regexp: '# cluster-enabled yes', line: 'cluster-enabled yes'}
+     - { regexp: '# cluster-config-file nodes-6379.conf', line: 'cluster-config-file {{install_path}}/redis/{{master_port}}/nodes.conf'}
+     - { regexp: '# cluster-node-timeout 15000', line: 'cluster-node-timeout 5000'}
+     - { regexp: 'appendonly no', line: 'appendonly yes'}
+     - { regexp: 'daemonize no', line: 'daemonize yes'}
+     - { regexp: '# masterauth <master-password>', line: 'masterauth {{redis_password}}'}
+     - { regexp: '# requirepass foobared', line: 'requirepass {{redis_password}}'}
+     - { regexp: 'pidfile /var/run/redis_6379.pid', line: 'pidfile  {{data_path}}/{{master_port}}/redis.pid'}
+     - { regexp: 'dir ./', line: 'dir {{data_path}}/{{master_port}}'}
+   become: true
+
+ - name: Copy config
+   copy:
+     src: '{{install_path}}/{{file_name}}/redis.conf'
+     dest: '{{install_path}}/redis/{{item.port}}/redis.conf'
+     remote_src: true
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+   become: true
+ 
+ - name: Replace slave config
+   replace:
+     path: '{{install_path}}/redis/{{slave_port}}/redis.conf'
+     regexp: '{{item.regexp}}'
+     replace: '{{ item.line }}'
+   with_items:
+     - { regexp: 'cluster-config-file {{install_path}}/redis/{{master_port}}/nodes.conf', line: 'cluster-config-file {{install_path}}/redis/{{slave_port}}/nodes.conf'}
+     - { regexp: 'pidfile  {{data_path}}/{{master_port}}/redis.pid', line: 'pidfile {{data_path}}/{{slave_port}}/redis.pid'}
+     - { regexp: 'dir {{data_path}}/{{master_port}}', line: 'dir {{data_path}}/{{slave_port}}'}
+   become: true
+ 
+ 
+ - name: Modify port
+   replace:
+     path: '{{item.path}}'
+     regexp: '{{item.regexp}}'
+     replace: '{{ item.line }}'
+   become: true
+   with_items:
+     - {path: '{{install_path}}/redis/{{master_port}}/redis.conf', regexp: 'port 6379', line: 'port {{master_port}}'}
+     - {path: '{{install_path}}/redis/{{slave_port}}/redis.conf', regexp: 'port 6379', line: 'port {{slave_port}}'}
+
+ - name: Delete nodes conf
+   file:
+     path: '{{install_path}}/{{item.port}}/nodes-{{item.port}}.conf'
+     state: 'absent'
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+   become: true
+ 
+ - name: Open redis ports
+   firewalld:
+    port:
+      - 6379/tcp
+      - 6380/tcp
+      - 16379/tcp
+      - 16380/tcp
+    permanent: yes
+    state: enabled
+    immediate: yes
+   become: true
+
+ - name: Start redis
+   shell: '{{install_path}}/{{file_name}}/src/redis-server {{install_path}}/redis/{{item.port}}/redis.conf'
+   with_items:
+     - { port: '{{master_port}}' }
+     - { port: '{{slave_port}}' }
+   become: true
+
+#  - name: cluster
+#    shell: 'echo yes |redis-cli --cluster create 192.168.209.131:6379 192.168.209.134:6379 192.168.209.135:6379 192.168.209.131:6380 192.168.209.134:6380 192.168.209.135:6380 --cluster-replicas 1 -a {{redis_password}}'
+#    become: true
+#    run_once: true
